@@ -89,10 +89,9 @@ class ActionFlowStep(FlowStep):
     type: FlowStepType = FlowStepType.ACTION
 
     action: str #动作名称 必填
-    args:dict = {} #动作参数 选填
+    args:dict | str = {} #动作参数 选填
     @classmethod
     def from_dict(cls, data: dict) -> "ActionFlowStep":
-        print("action")
         return cls(
             **FlowStep.base_fields(data),
             action=data["action"],

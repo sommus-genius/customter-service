@@ -1,118 +1,132 @@
+# atguigu/task/flow/loader.py
+
 from pathlib import Path
+from typing import List, Dict, Any
 
 import yaml
 
-from task.flow.flows import FlowList, Flow, FlowSlot
+from task.flow.flows import FlowsList, Flow, FlowSlot
+from task.flow.steps import FlowStep, CollectFlowStep
+"""
+yaml --->dict---->数据模型
+"""
 
 
 class FlowLoader:
-    def load_many(self, paths: list[Path]) -> FlowList:
+    """
+    流程加载器（加载两个yaml文件）
+    """
+    def load_many(self, paths: List[Path]) -> FlowsList:
+        flows: List[Flow] = []
+        slots: Dict[str, FlowSlot] = {}
+        for path in paths:
+            # 1. 加载单个yaml文件的flow_list
+            single_flows_list = self.load(path)
+            # 2. 获取单个yaml的flows
+            flows.extend(single_flows_list.flows)
+            # 3. 检测重复槽位
+            duplicate_slot_name = set(slots).intersection(single_flows_list.slots)
+            if duplicate_slot_name:  # 去重可选(建议做去重)
+                duplicates = ", ".join(sorted(duplicate_slot_name))
+                raise ValueError(
+                    f"flow定义中存在重复的槽位名称: {duplicates}."
+                )
+            # 4. 更新
+            slots.update(single_flows_list.slots)
+        return FlowsList(flows=flows, slots=slots)
+
+    def load(self, path: Path) -> FlowsList:
         """
-        加载多个 yml 文件
-        :param paths:
+        加载单个yaml文件
+        :param path:
         :return:
         """
-        flows: list[Flow] = []
-        slots: dict[str, FlowSlot] = {}
+        # 1. 读 YAML → dict
+        with  open(path, 'r', encoding="utf-8") as f:
+            data: Dict[str, Any] = yaml.safe_load(f)
 
-        for path in paths:
-            # 1.加载一个 yml 文件
-            single_flow_list = self.load(path)
+        # 2. 加载slots部分
+        slots: Dict[str, FlowSlot] = self._load_slots(data.get('slots', {}))
 
-            # 2.获取每个文件的flow并且合并到最终的flows中
-            flows.extend(single_flow_list.flows)
-
-            # 3.获取每个文件的slot，并将其合并、去重
-            sub_slots = single_flow_list.slots
-            # 两个集合取交集，判断是否重复
-            duplicate_slot_name = set(slots).intersection(sub_slots)
-            if duplicate_slot_name:
-                raise ValueError(f"Duplicate slot name: {duplicate_slot_name}")
-            slots.update(sub_slots)
-
-        return FlowList(flows=flows, slots=slots)
-
-    def load(self, path: Path) -> FlowList:
-        # 1. 读取 yml
-        with open(path, 'r', encoding='utf-8') as f:
-            # 防止脚本注入
-            data = yaml.safe_load(f)
-
-        # 2. 加载 slots
-        slots = self._load_slots(data.get('slots', {}))
-
-        # 3. 加载 flows
+        # 3. 加载flows部分
         flows = self._load_flows(data.get('flows', {}), slots)
 
-        # 4. 返回 FlowList
-        return FlowList(flows=flows, slots=slots)
+        return FlowsList(slots=slots, flows=flows)
 
-    def _load_slots(self, yml_slots_data: dict) -> dict[str, FlowSlot]:
-        slots: dict[str, FlowSlot] = {}
-
-        for slot_name, slot_data in yml_slots_data.items():
-            if slot_data is None:
-                slot_data = {}
-
-            slots[slot_name] = FlowSlot(name=slot_name, **slot_data)
+    def _load_slots(self, yaml_slots_data: Dict[str, Any]) -> Dict[str, FlowSlot]:
+        """
+        加载槽位
+        :param yaml_slots_data:
+        :return:
+        """
+        slots = {}
+        for slot_name, slot_dict in yaml_slots_data.items():
+            slots[slot_name] = FlowSlot(
+                name=slot_name,
+                **slot_dict
+            )
 
         return slots
 
-    def _load_flows(self, flows_data, slots: dict[str, FlowSlot]) -> list[Flow]:
-        flows: list[Flow] = []
-
-        if not isinstance(flows_data, dict):
-            # 兼容 flows 是 list 的情况
-            if isinstance(flows_data, list):
-                for flow_data in flows_data:
-                    if not isinstance(flow_data, dict):
-                        continue
-                    # 把 slots dict 转成 list 再传
-                    flow_data_copy = self._normalize_flow_data(flow_data)
-                    flow_data_copy['slots'] = list(slots.values())
-                    flow = Flow(**flow_data_copy)
-                    flows.append(flow)
-            return flows
-
-        # flows 是 dict：key 是 flow id，value 是 flow 配置
-        for flow_id, flow_data in flows_data.items():
-            if not isinstance(flow_data, dict):
-                continue
-
-            # 把 YAML 数据规范化：next 字符串转 list，slots dict 转 list
-            normalized = self._normalize_flow_data(flow_data)
-
-            # 把 dict key 作为 id 注入
-            normalized['id'] = flow_id
-
-            # slots 字段：dict -> list
-            normalized['slots'] = list(slots.values())
-
-            flow = Flow(**normalized)
-            flows.append(flow)
+    def _load_flows(self, yaml_flows_data: Dict[str, Any], slots_definition: Dict[str, FlowSlot]) -> List[Flow]:
+        """
+        加载流程
+        :param yaml_flows_data:
+        :param slots_definition:
+        :return:
+        """
+        flows: List[Flow] = []
+        for flow_id, flow_dict in yaml_flows_data.items():
+            steps = [FlowStep.from_dict(step) for step in flow_dict.get('steps', [])]
+            flows.append(
+                Flow(
+                    id=flow_id,
+                    description=flow_dict.get('description', ''),
+                    name=flow_dict.get('name'),
+                    steps=steps,
+                    slots=self._collect_flow_slots(slots_definition, steps)
+                )
+            )
 
         return flows
 
-    @staticmethod
-    def _normalize_flow_data(flow_data: dict) -> dict:
-        """规范化 flow 数据：处理 next 字段和 steps 中的类型转换"""
-        result = dict(flow_data)
+    def _collect_flow_slots(self, slots_definition: Dict[str, FlowSlot],
+                            steps: List[FlowStep]) -> List[FlowSlot]:
+        """
+        收集流程中的槽位
+        :param slots_definition:  业务的所有流程用到的所有槽位定义
+        :param steps: 当前流程的所有步骤
+        :return: 当前流程要用到的槽位定义
+        """
+        seen = set()
+        flow_slots = []
+        for step in steps:
 
-        # 处理 steps 中的 next 字段：字符串 -> list
-        if 'steps' in result and isinstance(result['steps'], list):
-            for step in result['steps']:
-                if isinstance(step, dict) and 'next' in step and isinstance(step['next'], str):
-                    step['next'] = [step['next']]
+            # 只看收集步骤
+            if not isinstance(step, CollectFlowStep):
+                continue
 
-        return result
+            # 去重
+            # 流程中可能会在不同的step中有重复的槽位名字
+            # (LLM看流程使用的槽位：在同一个流程下 没有必要给LLM两份一样的槽位名字)
+            step_slot_name = step.slot_name
+            if step_slot_name in seen:
+                # 流程中有重复的槽位名字不添加
+                continue
+            seen.add(step_slot_name)
+
+            # 用 get,查不到不报错
+            slot_definition = slots_definition.get(step_slot_name)
+            if slot_definition is not None:  # 流程中有的槽位名字对应的槽位定义有
+                flow_slots.append(slot_definition)
+
+        return flow_slots
 
 
 if __name__ == '__main__':
     base_path = Path(__file__).parents[3]
-    user_flow_path = base_path / "flow_config" / "user_flows.yml"
-    system_flow_path = base_path / "flow_config" / "system_flows.yml"
-
+    user_flow_path = base_path / 'flow_config' / 'user_flows.yml'
+    system_flow_path = base_path / 'flow_config' / 'system_flows.yml'
     loader = FlowLoader()
-    flow_list = loader.load_many([user_flow_path, system_flow_path])
-
-    print(flow_list)
+    flows_list = loader.load_many([user_flow_path, system_flow_path])
+    print(flows_list)

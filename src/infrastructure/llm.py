@@ -4,7 +4,6 @@ from langchain_core.language_models import BaseChatModel
 from src.conf.config import settings
 
 
-print(settings)
 """
 如果没有BaseChatModel，可能需要每次都写一套配置
 """

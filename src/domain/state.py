@@ -1,9 +1,11 @@
 import time
 
 import uuid
+from typing import Any
+
 from pydantic import BaseModel
 
-from domain.contexts import SystemContext, TaskContext
+from domain.contexts import SystemContextUnion, TaskContext
 from domain.messages import UserMessage, BotMessage, FocuseObject
 
 
@@ -33,7 +35,7 @@ class DialogueState(BaseModel):
     sender_id: str #用户唯一标识
     active_task: TaskContext | None = None #当前活跃的业务任务
     paused_tasks: list[TaskContext] = [] #被挂起的任务列表
-    active_system_task: SystemContext | None = None #当前执行的系统流程
+    active_system_task: SystemContextUnion | None = None #当前执行的系统流程
     focused_object: FocuseObject | None = None #用户当前聚焦的订单/商品
     sessions:list[Session] = [] #历史会话列表
     current_session_id: str | None = None #当前活跃会话的ID
@@ -73,10 +75,12 @@ class DialogueState(BaseModel):
         调用时机：当用户说了一些和当前任务无关的话时
         :return:
         """
+        if self.active_task is not None:
+            self.paused_tasks.append(self.active_task)
         self.active_task = None
         self.active_system_task = None
 
-    def resumed_active_task(self,flow_id: str | None):
+    def resumed_active_task(self,flow_id: str | None = None) -> bool:
         """
         恢复中断的活跃任务:流程ID
         如果用户没有明确指定需要回复的具体任务，那么 flow_id = None
@@ -87,23 +91,26 @@ class DialogueState(BaseModel):
         :param flow_id:
         :return:
         """
-        #1.恢复最近的任务
+        # 1.栈中是否存在可恢复的任务
+        if not self.paused_tasks:
+            return False
+
+        # 2.恢复最近的任务
         if not flow_id:
             self.active_task = self.paused_tasks.pop()
-            return
+            return True
 
-        #2.恢复指定任务
-        for task in self.paused_tasks:
-            if task.flow_id == flow_id:
-                self.active_task = task
-                self.paused_tasks.remove(task)
-                return
+        # 3.恢复指定任务
+        for i, paused_task in enumerate(self.paused_tasks):
+            if paused_task.flow_id == flow_id:
+                self.active_task = paused_task
+                del self.paused_tasks[i]
+                return True
 
-        #3.恢复失败，抛出异常
-        self.active_task = self.paused_tasks.pop()
-        return
+        # 4.没有找到指定任务，保持当前状态
+        return False
 
-    def start_active_system_task(self,active_system_task: SystemContext):
+    def start_active_system_task(self,active_system_task: SystemContextUnion):
         """
         开启系统流程
         调用时机：每当系统要插入系统流程（任务开始、打断、取消、恢复、收集槽位）时

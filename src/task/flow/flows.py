@@ -1,7 +1,7 @@
 from pydantic import BaseModel
 
 from task.flow.steps import FlowStep, StartFlowStep
-
+from typing import List, Dict
 
 class FlowSlot(BaseModel):
     """
@@ -44,9 +44,20 @@ class Flow(BaseModel):
                 return step
         return None
 
-class FlowList(BaseModel):
+class FlowsList(BaseModel):
     """
     流程列表
     """
-    flows: list[Flow] = [] #流程列表
-    slots: dict[str, FlowSlot] = {} #流程的槽位
+    flows: List[Flow] = []
+    slots: Dict[str, FlowSlot] = {}
+
+    def get_flow_by_id(self, flow_id: str) -> Flow | None:
+        """
+        根据流程ID获取流程
+        :param flow_id:
+        :return:
+        """
+        for flow in self.flows:
+            if flow.id == flow_id:
+                return flow
+        return None

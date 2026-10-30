@@ -57,7 +57,7 @@ class CollectedSystemContext(SystemContext):
     """
     流程收集
     """
-    flow_id: Literal["system_task_collected"] = "system_task_collected"
+    flow_id: Literal["system_collect_information"] = "system_collect_information"
     slot_name: str = ""
     response: dict = {}
 
